@@ -1,0 +1,19 @@
+                                                    可移植环境说明
+
+目的：为方便在Windows和Ubuntu环境下可以使用，所以需要按照统一的规范构建项目环境
+
+1. 首先在文件系统的某个目录下创建一个VirtualPythonEnvironment目录，用于在下面创建Python虚拟运行环境；
+2. 进入到VirtualPythonEnvironment/，使用virtualenv --no-site-packages --python=python3 GraduationThesis 基于Python3创建虚拟环境GraduationThesis；
+3. 继续执行 source GraduationThesis/bin/activate 进入到该虚拟环境中
+4. 安装必要的python 包，目前已经安装的包如下：
+  pandas
+  numpy
+  thrift
+  sasl
+  thrift-sasl
+  PyHive
+5. 在GraduationThesis目录下执行git init,将其创建为一个git repository
+6. 添加远程仓库 git remote add githubTheis git@github.com:LeroyCecilia/Thesis.git
+7. 将远程仓库中的代码克隆到该虚拟运行环境下
+8. 进行编码工程
+9. 将本地代码推送到远程仓库中
