@@ -163,7 +163,7 @@ def timeDimension(bar_code,time):
         result['quarter'] = '3'
     else:
         result['quarter'] = '4'
-    result['weekofyear'] = str(tModule.strftime("%W"))
+    result['weekofyear'] = str(time.strftime("%W"))
     result['dayofweek'] = str(time.weekday())
     if time.hour in range(6,19,1):
         result['dayornight'] = 'day'
@@ -732,9 +732,289 @@ def dphProcess(item,fileName):
 @Param  newTableName String  ：处理之后的新建Hive数据库表名
 """
 def processCombine(conn,sourceTableName,newTableName):
-    pass
+    #创建Cursor句柄
+    cursor = conn.cursor()
+    #操作
+    sql = "select * from " + sourceTableName
+    cursor.execute(sql)
+    fileName = "combine_detail.txt"
+    while True:
+        item = cursor.fetchone()
+        if item is None:
+            break
+        else:            
+            combineProcess(item,fileName)
+    #关闭cursor
+    cursor.close()
 
 
+
+"""
+@Description: 处理processcombine中每一条记录，具体而言如下：
+（1）接收以元组形式存在的记录；
+（2）依据参数生成新的特征；
+（3）将新的特征追加到文本文件中；
+@Param item tuple：从数据库表中查询出来的一条记录
+@Param fileName String: 保存数据的文件名称
+"""
+def combineProcess(item,fileName):
+    #将数据处理成dict方便后续取出
+    result = {}
+    result['bar_code'] = item[0]
+    result['dph_equip_id'] = item[1]
+    result['dph_material_code'] = item[2]
+    result['dph_bal_rank'] = item[3]
+    result['dph_ro_rank'] = item[4]
+    result['dph_ufm_rank'] = item[5]
+    result['build_plan_date'] = item[7]
+    result['build_work_shop_code'] = item[8]
+    result['build_shift_id'] = item[9]
+    result['build_class_id'] = item[10]
+    result['build_equip_code'] = item[11]
+    result['build_zjs_id'] = item[12]
+    result['build_batch_id'] = item[13]
+    result['build_material_code'] = item[14]
+    result['cur_work_shop_code'] = item[15]
+    result['cur_material_code'] = item[16]
+    result['cur_pot_id'] = item[17]
+    result['cur_shift_id'] = item[18]
+    result['cur_class_id'] = item[19]
+    result['cur_zjs_id'] = item[20]
+    result['cur_batch_id'] = item[21]
+    result['cur_tyrelevel'] = item[24]
+    result['cur_scan_time'] = item[25]
+    result['cur_mould_id'] = item[26]
+    if item[27] == "null":
+        return
+    tempList = item[27].split(",")
+    for i in range(len(tempList)):
+        tempList[i] = float(tempList[i])
+    result['board_temp_avg'] = np.mean(tempList)
+    result['board_temp_max'] = np.max(tempList)
+    result['board_temp_min'] = np.min(tempList)
+    result['board_temp_diff'] = result['board_temp_max']-result['board_temp_min']
+    result['board_temp_std'] = np.std(tempList)
+    result['board_time_length'] = timeDiff(item[29],item[30])
+    #根据board_starttime计算硫化时间指标
+    starttime = item[29].split(" ")
+    date = starttime[0].split("-")
+    time = starttime[1].split(":")
+    year = int(date[0])
+    month = int(date[1])
+    day = int(date[2])
+    hour = int(time[0])
+    minute = int(time[1])
+    starttime = datetime(year,month,day,hour,minute)
+    result['time'] = str(starttime)
+    result['year'] = str(starttime.year)
+    result['month'] = str(starttime.month)
+    result['day'] = str(starttime.day)
+    if starttime.month >6:
+        result['half_year'] = '上半年'
+    else:
+        result['half_year'] = '下半年'
+    if starttime.month in [1,2,3]:
+        result['quarter'] = '1'
+    elif starttime.month in [4,5,6]:
+        result['quarter'] = '2'
+    elif starttime.month in [7,8,9]:
+        result['quarter'] = '3'
+    else:
+        result['quarter'] = '4'
+    result['weekofyear'] = str(starttime.strftime("%W"))
+    result['dayofweek'] = str(starttime.weekday())
+    if starttime.hour in range(6,19,1):
+        result['dayornight'] = 'day'
+    else:
+        result['dayornight'] = 'night'
+    result['hour'] = str(starttime.hour)
+    result['minute'] = str(starttime.minute)
+    if item[31] == "null":
+        return
+    tempList = item[31].split(",")
+    for i in range(len(tempList)):
+        tempList[i] = float(tempList[i])   
+    result['inner_tempe_avg'] = np.mean(tempList)
+    result['inner_tempe_max'] = np.max(tempList)
+    result['inner_tempe_min'] = np.min(tempList)
+    result['inner_tempe_diff'] = result['inner_tempe_max']-result['inner_tempe_min']
+    result['inner_tempe_std'] = np.std(tempList)
+    result['inner_time_length'] = timeDiff(item[33],item[34])
+    if item[36] == "null":
+        return
+    tempList = item[36].split(",")
+    for i in range(len(tempList)):
+        tempList[i] = float(tempList[i])   
+    result['mould_tempe_avg'] = np.mean(tempList)
+    result['mould_tempe_max'] = np.max(tempList)
+    result['mould_tempe_min'] = np.min(tempList)
+    result['mould_tempe_diff'] = result['mould_tempe_max']-result['mould_tempe_min']
+    result['mould_tempe_std'] = np.std(tempList)
+    result['mould_time_length'] = timeDiff(item[38],item[39])
+    if item[40] == "null":
+        return
+    pressList = item[40].split(",")
+    for i in range(len(pressList)):
+        pressList[i] = float(pressList[i])   
+    result['inner_press_avg'] = np.mean(pressList)
+    result['inner_press_max'] = np.max(pressList)
+    result['inner_press_min'] = np.min(pressList)
+    result['inner_press_diff'] = result['inner_press_max']-result['inner_press_min']
+    result['inner_press_std'] = np.std(pressList)
+    result['inner_press_time_length'] = timeDiff(item[42],item[43])
+    
+    
+    #将数据写入到文本文件中
+    with open(fileName,'a') as file:
+        file.write(result['bar_code'])
+        file.write(",")
+        file.write(str(result['board_temp_avg']))
+        file.write(",")
+        file.write(str(result['board_temp_max']))
+        file.write(",")
+        file.write(str(result['board_temp_min']))
+        file.write(",")
+        file.write(str(result['board_temp_diff']))
+        file.write(",")
+        file.write(str(result['board_temp_std']))
+        file.write(",")
+        file.write(str(result['board_time_length']))
+        file.write(",")
+        file.write(result['time'])
+        file.write(",")
+        file.write(result['year'])
+        file.write(",")
+        file.write(result['month'])
+        file.write(",")
+        file.write(result['day'])
+        file.write(",")
+        file.write(result['half_year'])
+        file.write(",")
+        file.write(result['quarter'])
+        file.write(",")
+        file.write(result['weekofyear'])
+        file.write(",")
+        file.write(result['dayofweek'])
+        file.write(",")
+        file.write(result['dayornight'])
+        file.write(",")
+        file.write(result['hour'])
+        file.write(",")
+        file.write(result['minute'])
+        file.write(",")
+        file.write(str(result['inner_tempe_avg']))
+        file.write(",")
+        file.write(str(result['inner_tempe_max']))
+        file.write(",")
+        file.write(str(result['inner_tempe_min']))
+        file.write(",")
+        file.write(str(result['inner_tempe_diff']))
+        file.write(",")
+        file.write(str(result['inner_tempe_std']))
+        file.write(",")
+        file.write(str(result['inner_time_length']))
+        file.write(",")
+        file.write(str(result['inner_press_avg']))
+        file.write(",")
+        file.write(str(result['inner_press_max']))
+        file.write(",")
+        file.write(str(result['inner_press_min']))
+        file.write(",")
+        file.write(str(result['inner_press_diff']))
+        file.write(",")
+        file.write(str(result['inner_press_std']))
+        file.write(",")
+        file.write(str(result['inner_press_time_length']))
+        file.write(",")
+        file.write(str(result['mould_tempe_avg']))
+        file.write(",")
+        file.write(str(result['mould_tempe_max']))
+        file.write(",")
+        file.write(str(result['mould_tempe_min']))
+        file.write(",")
+        file.write(str(result['mould_tempe_diff']))
+        file.write(",")
+        file.write(str(result['mould_tempe_std']))
+        file.write(",")
+        file.write(str(result['mould_time_length']))
+        file.write(",")
+        file.write(str(result['build_plan_date']))
+        file.write(",")
+        file.write(str(result['build_work_shop_code']))
+        file.write(",")
+        file.write(str(result['build_shift_id']))
+        file.write(",")
+        file.write(str(result['build_class_id']))
+        file.write(",")
+        file.write(str(result['build_equip_code']))
+        file.write(",")
+        file.write(str(result['build_zjs_id']))
+        file.write(",")
+        file.write(str(result['build_batch_id']))
+        file.write(",")
+        file.write(str(result['build_material_code']))
+        file.write(",")
+        file.write(str(result['cur_work_shop_code']))
+        file.write(",")
+        file.write(str(result['cur_material_code']))
+        file.write(",")
+        file.write(str(result['cur_pot_id']))
+        file.write(",")
+        file.write(str(result['cur_shift_id']))
+        file.write(",")
+        file.write(str(result['cur_class_id']))
+        file.write(",")
+        file.write(str(result['cur_zjs_id']))
+        file.write(",")
+        file.write(str(result['cur_batch_id']))
+        file.write(",")
+        file.write(str(result['cur_tyrelevel']))
+        file.write(",")
+        file.write(str(result['cur_scan_time']))
+        file.write(",")
+        file.write(str(result['cur_mould_id']))
+        file.write(",")
+        file.write(str(result['dph_equip_id']))
+        file.write(",")
+        file.write(str(result['dph_material_code']))
+        file.write(",")
+        file.write(str(result['dph_bal_rank']))
+        file.write(",")
+        file.write(str(result['dph_ro_rank']))
+        file.write(",")
+        file.write(str(result['dph_ufm_rank']))
+        file.write("\n")
+    
+
+"""
+@Description:用于计算时间差,返回分钟数
+@Param starttime string ： 以206-10-10 09:00:00.0的形式存在
+@Param endtime string ： 以206-10-10 09:00:00.0的形式存在
+@Return 时间差 mins
+"""
+def timeDiff(starttime,endtime):
+    starttime = starttime.split(" ")
+    date = starttime[0].split("-")
+    time = starttime[1].split(":")
+    year = int(date[0])
+    month = int(date[1])
+    day = int(date[2])
+    hour = int(time[0])
+    minute = int(time[1])
+    starttime = datetime(year,month,day,hour,minute)
+    
+    endtime = endtime.split(" ")
+    date = endtime[0].split("-")
+    time = endtime[1].split(":")
+    year = int(date[0])
+    month = int(date[1])
+    day = int(date[2])
+    hour = int(time[0])
+    minute = int(time[1])
+    endtime = datetime(year,month,day,hour,minute)
+    #计算硫化时长
+    return (endtime.timestamp()- starttime.timestamp())/60
+    
 #主函数，用于实施各个数据表的ETL
 def ETL():
 
@@ -745,7 +1025,7 @@ def ETL():
     #processMouldDetail(conn,"c_c_mould_detail","mould_detail")
     #processBuildInfoDetail(conn,"p_b_build_pro_info_detail","build_info_detail")
     #processCurInfoDetail(conn,"p_c_cur_pro_info_detail","cur_info_detail")
-    processDphDetail(conn,"r_q_qual_dph_info","dph_detail")
+    #processDphDetail(conn,"r_q_qual_dph_info","dph_detail")
     processCombine(conn,"combine","combine_detail")
     conn.close()
 
