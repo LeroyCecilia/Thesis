@@ -2,14 +2,14 @@
 """
 @Description:
     本脚本主要用于将c_c_board_detail，c_c_inner_detail,c_c_inner_press_detail，
-    c_c_mould_detail,p_b_build_info_detail,p_c_cur_info_detail中的属性进行预处理，
+    c_c_mould_detail,p_b_build_pro_info_detail,p_c_cur_pro_info_detail中的属性进行预处理，
     将复合特征拆分成新的特征。
-    同时从r_q_qual_dph_detail表中抽取几个真正与质量结果有关的属性（对属性进行筛选）。
+    同时从r_q_qual_dph_info表中抽取几个真正与质量结果有关的属性（对属性进行筛选）。
     对应生成：board_detail,inner_detail,inner_press_detail,mould_detail,
     build_info_detail,cur_info_detail以及dph_detail。
     最后针对combine表进行ETL处理得到combine_detail。
 @Operation Steps:
-    (1)通过pyhs2连接CDH中的Hive
+    (1)通过PyHive连接CDH中的Hive
     (2)针对各个表格中的数据进行逐行处理
     (3)保存成新的Hive数据表
     (4)关闭Hive连接
@@ -17,6 +17,10 @@
 @Date: 2018-05-18
 """
 
+import numpy as np
+from datetime import datetime
+import time as tModule
+from pyhive import hive
 """
 @Description:本函数用于连接CDH中的Hive
 @Param host String : 主机名
@@ -27,124 +31,703 @@
 @Return 
 """
 
-from pyhive import hive
-
 def hiveConn(host,port,username,database):
     conn = hive.Connection(host=host, port=port, username=username, database=database)
     return conn
-    
 
 
 """
 @Description:本函数主要用于对原始的c_c_board_detail表进行ETL，得到新的模式。
-@Param  conn : PyHive提供的用于连接HiveServer2的句柄
+@Param  conn pyhive.hive.Connection 到Hive的连接实例
 @Param  sourceTableName String ：待处理的源Hive数据库表名
 @Param  newTableName String  ：处理之后的新建Hive数据库表名
 """
 def processBoardDetail(conn,sourceTableName,newTableName):
+    #创建Cursor句柄
     cursor = conn.cursor()
-    cursor.execute('select * from c_c_board_detail limit 2')
-    file = open('./hiveTemp.txt','w')
+    #操作
+    sql = "select * from " + sourceTableName
+    cursor.execute(sql)
+    fileName = "board_detail.txt"
     while True:
         item = cursor.fetchone()
         if item is None:
-            break;
+            break
         else:
-            result = {}            
-            result['bar_code'] = item[0]
-            result['board_temp'] = item[1]
-            result['time'] = item[2]
-            result['starttime'] = item[3]
-            result['endtime'] = item[4]
-            resultString = board_detail_feature(result)
-            #将数据写入到文本文件中，field terminated by ',',line terminated by '\n'
-            file.write(resultString)
-            print(result)
+            boardProcess(item,fileName)
+    #最后将文本文件中的数据load到Hive数据库表中
+    sql = "load data local inpath \'" + fileName + "\' overwrite into table " + newTableName
+    #cursor.execute(sql)
+    #将timeDimension.txt文件中的数据load到Hive表中
+    sql = "load data local inpath \'" + "timeDimension.txt" + "\' overwrite into table time"
+    #cursor.execute(sql)
+    #关闭cursor
     cursor.close()
-    conn.close()    
-    #首先创建新的表
-    sql = "create table IF NOT EXISTS board_detail()"
-    cursor.execute(sql)
-    pass
-
 
 """
-@Description:该函数用于接收c_c_board_detail中的记录，并按照设计的样子得到新的记录（以字符串的形式）
-@Param source dict: 原始数据字典
-@Return resultString String: 返回的结果字符串
-说明：
-字符串的组成如下：
-bar_code, board_temp_avg, board_temp_max,board_temp_min,board_temp_period"""
-def board_detail_feature(source):
-    resultString = ""
-    resultString += source["bar_code"]
-    tempList = source["board_temp"].split(",")
+@Description: 处理processBoardDetail中每一条记录，具体而言如下：
+（1）接收以元组形式存在的记录；
+（2）依据参数生成新的特征；
+（3）将新的特征追加到文本文件中；
+@Param item tuple：从数据库表中查询出来的一条记录
+@Param fileName String: 保存数据的文件名称
+"""
+def boardProcess(item,fileName):
+    #将数据转存成dict形式，后续在查询的时候效率更高
+    result = {}
+    result['bar_code'] = item[0]
+    result['board_temp'] = item[1]
+    result['time'] = item[2]
+    result['starttime'] = item[3]
+    result['endtime'] = item[4]
+    #处理board_temp，求avg，max，min，diff，std。
+    tempList = result['board_temp'].split(',')
     for i in range(len(tempList)):
         tempList[i] = float(tempList[i])
-    resultString += "\n"
-    return resultString
+    result['board_temp_avg'] = np.mean(tempList)
+    result['board_temp_max'] = np.max(tempList)
+    result['board_temp_min'] = np.min(tempList)
+    result['board_temp_diff'] = result['board_temp_max'] - result['board_temp_min']
+    result['board_temp_std'] = np.std(tempList)
+    #处理时间参数，形成硫化时长、时间维度等新的特征
+    starttime = result['starttime'].split(" ")
+    date = starttime[0].split("-")
+    time = starttime[1].split(":")
+    year = int(date[0])
+    month = int(date[1])
+    day = int(date[2])
+    hour = int(time[0])
+    minute = int(time[1])
+    starttime = datetime(year,month,day,hour,minute)
+    
+    endtime = result['endtime'].split(" ")
+    date = endtime[0].split("-")
+    time = endtime[1].split(":")
+    year = int(date[0])
+    month = int(date[1])
+    day = int(date[2])
+    hour = int(time[0])
+    minute = int(time[1])
+    endtime = datetime(year,month,day,hour,minute)
+    
+    #计算硫化时长
+    result['board_time_length'] = (endtime.timestamp()- starttime.timestamp())/60
+    #将数据写入到文本文件中
+    with open(fileName,'a') as file:
+        file.write(result['bar_code'])
+        file.write(",")
+        file.write(str(result['board_temp_avg']))
+        file.write(",")
+        file.write(str(result['board_temp_max']))
+        file.write(",")
+        file.write(str(result['board_temp_min']))
+        file.write(",")
+        file.write(str(result['board_temp_diff']))
+        file.write(",")
+        file.write(str(result['board_temp_std']))
+        file.write(",")
+        file.write(str(result['board_time_length']))
+        file.write(",")
+        file.write(result['starttime'])
+        file.write(",")
+        file.write(result['endtime'])
+        file.write("\n")
+    #将starttime交给timeDiemension（）函数用于产生时间维度表
+    timeDimension(result['bar_code'],starttime)
+    
+
+
 
 """
 @Description:本函数主要用于对原始c_c_inner_detail表进行数据ETL，得到新的模式。
-@Param  conn : PyHive提供的用于连接HiveServer2的句柄
+@Description: 根据starttime生成硫化时间相关的时间维度表，并将其存储到文本文件中
+@Param bar_code String: 将bar_code作为time_id
+@Param time datetime： 时间，形式为2018-10-10 08:00:00
+"""
+def timeDimension(bar_code,time):
+    result = {}
+    result['bar_code'] = bar_code
+    result['time'] = str(time)
+    result['year'] = str(time.year)
+    result['month'] = str(time.month)
+    result['day'] = str(time.day)
+    if time.month >6:
+        result['half_year'] = '上半年'
+    else:
+        result['half_year'] = '下半年'
+    if time.month in [1,2,3]:
+        result['quarter'] = '1'
+    elif time.month in [4,5,6]:
+        result['quarter'] = '2'
+    elif time.month in [7,8,9]:
+        result['quarter'] = '3'
+    else:
+        result['quarter'] = '4'
+    result['weekofyear'] = str(tModule.strftime("%W"))
+    result['dayofweek'] = str(time.weekday())
+    if time.hour in range(6,19,1):
+        result['dayornight'] = 'day'
+    else:
+        result['dayornight'] = 'night'
+    result['hour'] = str(time.hour)
+    result['minute'] = str(time.minute)
+    #将信息写入到文本文件中
+    with open('./timeDimension.txt','a') as file:
+        file.write(result['bar_code'])
+        file.write(",")
+        file.write(result['time'])
+        file.write(",")
+        file.write(result['year'])
+        file.write(",")
+        file.write(result['month'])
+        file.write(",")
+        file.write(result['day'])
+        file.write(",")
+        file.write(result['half_year'])
+        file.write(",")
+        file.write(result['quarter'])
+        file.write(",")
+        file.write(result['weekofyear'])
+        file.write(",")
+        file.write(result['dayofweek'])
+        file.write(",")
+        file.write(result['dayornight'])
+        file.write(",")
+        file.write(result['hour'])
+        file.write(",")
+        file.write(result['minute'])
+        file.write("\n")
+        
+    
+"""
+@Description:本函数主要用于对原始c_c_inner_detail表进行数据ETL，得到新的模式。
+@Param  conn pyhive.hive.Connection 到Hive的连接实例
 @Param  sourceTableName String ：待处理的源Hive数据库表名
 @Param  newTableName String  ：处理之后的新建Hive数据库表名
 """
 def processInnerDetail(conn,sourceTableName,newTableName):
-    pass
+    #创建Cursor句柄
+    cursor = conn.cursor()
+    #操作
+    sql = "select * from " + sourceTableName
+    cursor.execute(sql)
+    fileName = "inner_detail.txt"
+    while True:
+        item = cursor.fetchone()
+        if item is None:
+            break
+        else:            
+            innerProcess(item,fileName)
+    #关闭cursor
+    cursor.close()
+
+"""
+@Description: 处理processInnerDetail中每一条记录，具体而言如下：
+（1）接收以元组形式存在的记录；
+（2）依据参数生成新的特征；
+（3）将新的特征追加到文本文件中；
+@Param item tuple：从数据库表中查询出来的一条记录
+@Param fileName String: 保存数据的文件名称
+"""
+def innerProcess(item,fileName):
+    #将数据处理成dict方便后续取出
+    result = {}
+    result['bar_code'] = item[0]
+    result['inner_tempe'] = item[1]
+    result['time'] = item[2]
+    result['starttime'] = item[3]
+    result['endtime'] = item[4]
+    #item[5]的值缺失，默认是以"null"表示的。
+    result['add_timestamp'] = item[6]
+    #处理inner_tempe，求avg，max，min，diff，std。
+    tempList = result['inner_tempe'].split(',')
+    for i in range(len(tempList)):
+        tempList[i] = float(tempList[i])
+    result['inner_tempe_avg'] = np.mean(tempList)
+    result['inner_tempe_max'] = np.max(tempList)
+    result['inner_tempe_min'] = np.min(tempList)
+    result['inner_tempe_diff'] = result['inner_tempe_max'] - result['inner_tempe_min']
+    result['inner_tempe_std'] = np.std(tempList)
+    #处理时间参数，形成时长、时间维度等新的特征
+    starttime = result['starttime'].split(" ")
+    date = starttime[0].split("-")
+    time = starttime[1].split(":")
+    year = int(date[0])
+    month = int(date[1])
+    day = int(date[2])
+    hour = int(time[0])
+    minute = int(time[1])
+    starttime = datetime(year,month,day,hour,minute)
+    
+    endtime = result['endtime'].split(" ")
+    date = endtime[0].split("-")
+    time = endtime[1].split(":")
+    year = int(date[0])
+    month = int(date[1])
+    day = int(date[2])
+    hour = int(time[0])
+    minute = int(time[1])
+    endtime = datetime(year,month,day,hour,minute)
+    
+    #计算inner_time_length
+    result['inner_time_length'] = (endtime.timestamp()- starttime.timestamp())/60
+    #将数据写入到文本文件中
+    with open(fileName,'a') as file:
+        file.write(result['bar_code'])
+        file.write(",")
+        file.write(str(result['inner_tempe_avg']))
+        file.write(",")
+        file.write(str(result['inner_tempe_max']))
+        file.write(",")
+        file.write(str(result['inner_tempe_min']))
+        file.write(",")
+        file.write(str(result['inner_tempe_diff']))
+        file.write(",")
+        file.write(str(result['inner_tempe_std']))
+        file.write(",")
+        file.write(str(result['inner_time_length']))
+        file.write(",")
+        file.write(result['starttime'])
+        file.write(",")
+        file.write(result['endtime'])
+        file.write(",")
+        file.write(result['add_timestamp'])
+        file.write("\n")
 
 """
 @Description:本函数主要用于对原始c_c_inner_press_detail表进行数据ETL，得到新的模式。
-@Param  conn : PyHive提供的用于连接HiveServer2的句柄
+@Param  conn pyhive.hive.Connection 到Hive的连接实例
 @Param  sourceTableName String ：待处理的源Hive数据库表名
 @Param  newTableName String  ：处理之后的新建Hive数据库表名
 """
 def processInnerPressDetail(conn,sourceTableName,newTableName):
-    pass
+    #创建Cursor句柄
+    cursor = conn.cursor()
+    #操作
+    sql = "select * from " + sourceTableName
+    cursor.execute(sql)
+    fileName = "inner_press_detail.txt"
+    while True:
+        item = cursor.fetchone()
+        if item is None:
+            break
+        else:            
+            innerPressProcess(item,fileName)
+    #关闭cursor
+    cursor.close()
+
+
+"""
+@Description: 处理processInnerPressDetail中每一条记录，具体而言如下：
+（1）接收以元组形式存在的记录；
+（2）依据参数生成新的特征；
+（3）将新的特征追加到文本文件中；
+@Param item tuple：从数据库表中查询出来的一条记录
+@Param fileName String: 保存数据的文件名称
+"""
+def innerPressProcess(item,fileName):
+    #将数据处理成dict方便后续取出
+    result = {}
+    result['bar_code'] = item[0]
+    result['inner_press'] = item[1]
+    result['time'] = item[2]
+    result['starttime'] = item[3]
+    result['endtime'] = item[4]
+    #处理inner_press，求avg，max，min，diff，std。
+    pressList = result['inner_press'].split(',')
+    for i in range(len(pressList)):
+        pressList[i] = float(pressList[i])
+    result['inner_press_avg'] = np.mean(pressList)
+    result['inner_press_max'] = np.max(pressList)
+    result['inner_press_min'] = np.min(pressList)
+    result['inner_press_diff'] = result['inner_press_max'] - result['inner_press_min']
+    result['inner_press_std'] = np.std(pressList)
+    #处理时间参数，形成时长、时间维度等新的特征
+    starttime = result['starttime'].split(" ")
+    date = starttime[0].split("-")
+    time = starttime[1].split(":")
+    year = int(date[0])
+    month = int(date[1])
+    day = int(date[2])
+    hour = int(time[0])
+    minute = int(time[1])
+    starttime = datetime(year,month,day,hour,minute)
+    
+    endtime = result['endtime'].split(" ")
+    date = endtime[0].split("-")
+    time = endtime[1].split(":")
+    year = int(date[0])
+    month = int(date[1])
+    day = int(date[2])
+    hour = int(time[0])
+    minute = int(time[1])
+    endtime = datetime(year,month,day,hour,minute)
+    
+    #计算inner_time_length
+    result['inner_press_time_length'] = (endtime.timestamp()- starttime.timestamp())/60
+    #将数据写入到文本文件中
+    with open(fileName,'a') as file:
+        file.write(result['bar_code'])
+        file.write(",")
+        file.write(str(result['inner_press_avg']))
+        file.write(",")
+        file.write(str(result['inner_press_max']))
+        file.write(",")
+        file.write(str(result['inner_press_min']))
+        file.write(",")
+        file.write(str(result['inner_press_diff']))
+        file.write(",")
+        file.write(str(result['inner_press_std']))
+        file.write(",")
+        file.write(str(result['inner_press_time_length']))
+        file.write(",")
+        file.write(result['starttime'])
+        file.write(",")
+        file.write(result['endtime'])
+        file.write("\n")
 
 
 """
 @Description:本函数主要用于对原始c_c_mould_detail表进行数据ETL，得到新的模式。
-@Param  conn : PyHive提供的用于连接HiveServer2的句柄
+@Param  conn pyhive.hive.Connection 到Hive的连接实例
 @Param  sourceTableName String ：待处理的源Hive数据库表名
 @Param  newTableName String  ：处理之后的新建Hive数据库表名
 """
 def processMouldDetail(conn,sourceTableName,newTableName):
-    pass
+    #创建Cursor句柄
+    cursor = conn.cursor()
+    #操作
+    sql = "select * from " + sourceTableName
+    cursor.execute(sql)
+    fileName = "mould_detail.txt"
+    while True:
+        item = cursor.fetchone()
+        if item is None:
+            break
+        else:            
+            mouldProcess(item,fileName)
+    #关闭cursor
+    cursor.close()
+
 
 
 """
+@Description: 处理processMouldDetail中每一条记录，具体而言如下：
+（1）接收以元组形式存在的记录；
+（2）依据参数生成新的特征；
+（3）将新的特征追加到文本文件中；
+@Param item tuple：从数据库表中查询出来的一条记录
+@Param fileName String: 保存数据的文件名称
+"""
+def mouldProcess(item,fileName):
+    #将数据处理成dict方便后续取出
+    result = {}
+    result['bar_code'] = item[0]
+    result['mould_tempe'] = item[1]
+    result['time'] = item[2]
+    result['starttime'] = item[3]
+    result['endtime'] = item[4]
+    #处理inner_press，求avg，max，min，diff，std。
+    tempList = result['mould_tempe'].split(',')
+    for i in range(len(tempList)):
+        tempList[i] = float(tempList[i])
+    result['mould_tempe_avg'] = np.mean(tempList)
+    result['mould_tempe_max'] = np.max(tempList)
+    result['mould_tempe_min'] = np.min(tempList)
+    result['mould_tempe_diff'] = result['mould_tempe_max'] - result['mould_tempe_min']
+    result['mould_tempe_std'] = np.std(tempList)
+    #处理时间参数，形成时长、时间维度等新的特征
+    starttime = result['starttime'].split(" ")
+    date = starttime[0].split("-")
+    time = starttime[1].split(":")
+    year = int(date[0])
+    month = int(date[1])
+    day = int(date[2])
+    hour = int(time[0])
+    minute = int(time[1])
+    starttime = datetime(year,month,day,hour,minute)
+    
+    endtime = result['endtime'].split(" ")
+    date = endtime[0].split("-")
+    time = endtime[1].split(":")
+    year = int(date[0])
+    month = int(date[1])
+    day = int(date[2])
+    hour = int(time[0])
+    minute = int(time[1])
+    endtime = datetime(year,month,day,hour,minute)
+    
+    #计算inner_time_length
+    result['mould_time_length'] = (endtime.timestamp()- starttime.timestamp())/60
+    #将数据写入到文本文件中
+    with open(fileName,'a') as file:
+        file.write(result['bar_code'])
+        file.write(",")
+        file.write(str(result['mould_tempe_avg']))
+        file.write(",")
+        file.write(str(result['mould_tempe_max']))
+        file.write(",")
+        file.write(str(result['mould_tempe_min']))
+        file.write(",")
+        file.write(str(result['mould_tempe_diff']))
+        file.write(",")
+        file.write(str(result['mould_tempe_std']))
+        file.write(",")
+        file.write(str(result['mould_time_length']))
+        file.write(",")
+        file.write(result['starttime'])
+        file.write(",")
+        file.write(result['endtime'])
+        file.write("\n")
+        
+
+"""
 @Description:本函数主要用于对原始p_b_build_info_detail表进行数据ETL，得到新的模式。
-@Param  conn : PyHive提供的用于连接HiveServer2的句柄
+@Param  conn pyhive.hive.Connection 到Hive的连接实例
 @Param  sourceTableName String ：待处理的源Hive数据库表名
 @Param  newTableName String  ：处理之后的新建Hive数据库表名
 """
 def processBuildInfoDetail(conn,sourceTableName,newTableName):
-    pass
+    #创建Cursor句柄
+    cursor = conn.cursor()
+    #操作
+    sql = "select * from " + sourceTableName
+    cursor.execute(sql)
+    fileName = "build_info_detail.txt"
+    while True:
+        item = cursor.fetchone()
+        if item is None:
+            break
+        else:            
+            buildInfoProcess(item,fileName)
+    #关闭cursor
+    cursor.close()
+
+
+
+
+"""
+@Description: 处理processMouldDetail中每一条记录，具体而言如下：
+（1）接收以元组形式存在的记录；
+（2）依据参数生成新的特征；
+（3）将新的特征追加到文本文件中；
+@Param item tuple：从数据库表中查询出来的一条记录
+@Param fileName String: 保存数据的文件名称
+"""
+def buildInfoProcess(item,fileName):
+    #将数据处理成dict方便后续取出
+    result = {}
+    result['bar_code'] = item[0]
+    result['plan_date'] = item[1]
+    result['work_shop_code'] = item[2]
+    result['shift_id'] = item[3]
+    result['class_id'] = item[4]
+    result['equip_code'] = item[5]
+    result['zjs_id'] = item[6]
+    result['batch_id'] = item[7]
+    result['material_code'] = item[8]
+    
+    #将数据写入到文本文件中
+    with open(fileName,'a') as file:
+        file.write(result['bar_code'])
+        file.write(",")
+        file.write(str(result['plan_date'] ))
+        file.write(",")
+        file.write(str(result['work_shop_code']))
+        file.write(",")
+        file.write(str(result['shift_id']))
+        file.write(",")
+        file.write(str(result['class_id']))
+        file.write(",")
+        file.write(str(result['equip_code']))
+        file.write(",")
+        file.write(str(result['zjs_id']))
+        file.write(",")
+        file.write(result['batch_id'])
+        file.write(",")
+        file.write(result['material_code'])
+        file.write("\n")
+        
+
 
 """
 @Description:本函数主要用于对原始p_c_cur_info_detail表进行数据ETL，得到新的模式。
-@Param  conn : PyHive提供的用于连接HiveServer2的句柄
+@Param  conn pyhive.hive.Connection 到Hive的连接实例
 @Param  sourceTableName String ：待处理的源Hive数据库表名
 @Param  newTableName String  ：处理之后的新建Hive数据库表名
 """
 def processCurInfoDetail(conn,sourceTableName,newTableName):
-    pass
+    #创建Cursor句柄
+    cursor = conn.cursor()
+    #操作
+    sql = "select * from " + sourceTableName
+    cursor.execute(sql)
+    fileName = "cur_info_detail.txt"
+    while True:
+        item = cursor.fetchone()
+        if item is None:
+            break
+        else:            
+            curInfoProcess(item,fileName)
+    #关闭cursor
+    cursor.close()
+
+
+"""
+@Description: 处理processMouldDetail中每一条记录，具体而言如下：
+（1）接收以元组形式存在的记录；
+（2）依据参数生成新的特征；
+（3）将新的特征追加到文本文件中；
+@Param item tuple：从数据库表中查询出来的一条记录
+@Param fileName String: 保存数据的文件名称
+"""
+def curInfoProcess(item,fileName):
+    #将数据处理成dict方便后续取出
+    result = {}
+    result['bar_code'] = item[0]
+    result['work_shop_code'] = item[1]
+    result['material_code'] = item[2]
+    result['pot_id'] = item[3]
+    result['shift_id'] = item[4]
+    result['class_id'] = item[5]
+    result['zjs_id'] = item[6]
+    result['batch_id'] = item[7]
+    result['starttime'] = item[8]
+    result['endtime'] = item[9]
+    result['typelevel'] = item[10]
+    result['scan_time'] = item[11]
+    result['mould_id'] = item[12]
+    #将数据写入到文本文件中
+    with open(fileName,'a') as file:
+        file.write(result['bar_code'])
+        file.write(",")
+        file.write(str(result['work_shop_code']))
+        file.write(",")
+        file.write(str(result['material_code']))
+        file.write(",")
+        file.write(str(result['pot_id']))
+        file.write(",")
+        file.write(str(result['shift_id']))
+        file.write(",")
+        file.write(str(result['class_id']))
+        file.write(",")
+        file.write(str(result['zjs_id']))
+        file.write(",")
+        file.write(result['batch_id'])
+        file.write(",")
+        file.write(str(result['starttime']))
+        file.write(",")
+        file.write(str(result['endtime']))
+        file.write(",")
+        file.write(str(result['typelevel']))
+        file.write(",")
+        file.write(str(result['scan_time']))
+        file.write(",")
+        file.write(result['mould_id'])
+        file.write("\n")
+        
 
 
 """
 @Description:本函数主要用于对原始r_q_qual_dph_detail表进行数据ETL，得到新的模式。
-@Param  conn : PyHive提供的用于连接HiveServer2的句柄
+@Param  conn pyhive.hive.Connection 到Hive的连接实例
 @Param  sourceTableName String ：待处理的源Hive数据库表名
 @Param  newTableName String  ：处理之后的新建Hive数据库表名
 """
 def processDphDetail(conn,sourceTableName,newTableName):
-    pass
+    #创建Cursor句柄
+    cursor = conn.cursor()
+    #操作
+    sql = "select * from " + sourceTableName
+    cursor.execute(sql)
+    fileName = "dph_detail.txt"
+    while True:
+        item = cursor.fetchone()
+        if item is None:
+            break
+        else:            
+            dphProcess(item,fileName)
+    #关闭cursor
+    cursor.close()
 
+"""
+@Description: 处理processMouldDetail中每一条记录，具体而言如下：
+（1）接收以元组形式存在的记录；
+（2）依据参数生成新的特征；
+（3）将新的特征追加到文本文件中；
+@Param item tuple：从数据库表中查询出来的一条记录
+@Param fileName String: 保存数据的文件名称
+"""
+def dphProcess(item,fileName):
+    #将数据处理成dict方便后续取出
+    result = {}
+    result['dph_detail_id'] = item[0]
+    result['equip_id'] = item[1]
+    result['board_detail_id'] = item[0]
+    result['inner_detail_id'] = item[0]
+    result['inner_press_detail_id'] = item[0]
+    result['mould_detail_id'] = item[0]
+    result['build_info_detail_id'] = item[0]
+    result['cur_info_detail_id'] = item[0]
+    result['time_id'] = item[0]
+    result['load'] = item[3]
+    result['bal_rank'] = item[4]
+    result['ro_rank'] = item[5]
+    result['ufm_rank'] = item[6]
+    result['djid'] = item[8]
+    result['total_rank'] = item[9]
+    result['up_low_rank'] = item[10]
+    result['up_low_g'] = item[11]
+    result['couple_rank'] = item[12]
+    result['lower_rank'] = item[13]
+    result['upper_rank'] = item[14]
+    #将数据写入到文本文件中
+    with open(fileName,'a') as file:
+        file.write(result['dph_detail_id'])
+        file.write(",")
+        file.write(str(result['equip_id']))
+        file.write(",")
+        file.write(str(result['board_detail_id']))
+        file.write(",")
+        file.write(str(result['inner_detail_id']))
+        file.write(",")
+        file.write(str(result['inner_press_detail_id']))
+        file.write(",")
+        file.write(str(result['mould_detail_id']))
+        file.write(",")
+        file.write(str(result['build_info_detail_id']))
+        file.write(",")
+        file.write(result['cur_info_detail_id'])
+        file.write(",")
+        file.write(str(result['time_id']))
+        file.write(",")
+        file.write(str(result['load']))
+        file.write(",")
+        file.write(str(result['bal_rank']))
+        file.write(",")
+        file.write(str(result['ro_rank']))
+        file.write(",")
+        file.write(str(result['ufm_rank']))
+        file.write(",")
+        file.write(str(result['djid']))
+        file.write(",")
+        file.write(str(result['total_rank']))
+        file.write(",")
+        file.write(str(result['up_low_rank']))
+        file.write(",")
+        file.write(str(result['up_low_g']))
+        file.write(",")
+        file.write(str(result['couple_rank']))
+        file.write(",")
+        file.write(str(result['lower_rank']))
+        file.write(",")
+        file.write(str(result['upper_rank']))
+        file.write("\n")
+        
 
 """
 @Description:本函数主要用于对原始combine表进行数据ETL，得到新的模式。
-@Param  conn : PyHive提供的用于连接HiveServer2的句柄
+@Param  conn pyhive.hive.Connection 到Hive的连接实例
 @Param  sourceTableName String ：待处理的源Hive数据库表名
 @Param  newTableName String  ：处理之后的新建Hive数据库表名
 """
@@ -154,14 +737,17 @@ def processCombine(conn,sourceTableName,newTableName):
 
 #主函数，用于实施各个数据表的ETL
 def ETL():
-    conn = hiveConn('10.141.212.26',10000,'root','linglong')
-    """processBoardDetail(conn,"c_c_board_detail","board_detail")
-    processInnerDetail(conn,"c_c_inner_detail","inner_detail")
-    processInnerPressDetail(conn,"c_c_inner_press_detail","inner_press_detail")
-    processMouldDetail(conn,"c_c_mould_detail","mould_detail")
-    processBuildInfoDetail(conn,"p_b_build_info_detail","build_info_detail")
-    processCurInfoDetail(conn,"p_c_cur_info_detail","cur_info_detail")
-    processDphDetail(conn,"r_q_dph_info_detail","dph_detail")
-    processCombine(conn,"combine","combine_detail")"""
-    
+
+    conn = hiveConn("10.141.212.26",10000,"root","linglong")
+    #processBoardDetail(conn,"c_c_board_detail","board_detail")
+    #processInnerDetail(conn,"c_c_inner_detail","inner_detail")
+    #processInnerPressDetail(conn,"c_c_inner_press_detail","inner_press_detail")
+    #processMouldDetail(conn,"c_c_mould_detail","mould_detail")
+    #processBuildInfoDetail(conn,"p_b_build_pro_info_detail","build_info_detail")
+    #processCurInfoDetail(conn,"p_c_cur_pro_info_detail","cur_info_detail")
+    processDphDetail(conn,"r_q_qual_dph_info","dph_detail")
+    processCombine(conn,"combine","combine_detail")
+    conn.close()
+
+#调用主函数
 ETL()
