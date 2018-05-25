@@ -982,6 +982,7 @@ def combineProcess(item,fileName):
         file.write(",")
         file.write(str(result['dph_ro_rank']))
         file.write(",")
+
         file.write(str(result['dph_ufm_rank']))
         file.write("\n")
     
@@ -1019,13 +1020,13 @@ def timeDiff(starttime,endtime):
 def ETL():
 
     conn = hiveConn("10.141.212.26",10000,"root","linglong")
-    #processBoardDetail(conn,"c_c_board_detail","board_detail")
-    #processInnerDetail(conn,"c_c_inner_detail","inner_detail")
-    #processInnerPressDetail(conn,"c_c_inner_press_detail","inner_press_detail")
-    #processMouldDetail(conn,"c_c_mould_detail","mould_detail")
-    #processBuildInfoDetail(conn,"p_b_build_pro_info_detail","build_info_detail")
-    #processCurInfoDetail(conn,"p_c_cur_pro_info_detail","cur_info_detail")
-    #processDphDetail(conn,"r_q_qual_dph_info","dph_detail")
+    processBoardDetail(conn,"c_c_board_detail","board_detail")
+    processInnerDetail(conn,"c_c_inner_detail","inner_detail")
+    processInnerPressDetail(conn,"c_c_inner_press_detail","inner_press_detail")
+    processMouldDetail(conn,"c_c_mould_detail","mould_detail")
+    processBuildInfoDetail(conn,"p_b_build_pro_info_detail","build_info_detail")
+    processCurInfoDetail(conn,"p_c_cur_pro_info_detail","cur_info_detail")
+    processDphDetail(conn,"r_q_qual_dph_info","dph_detail")
     processCombine(conn,"combine","combine_detail")
     conn.close()
 
